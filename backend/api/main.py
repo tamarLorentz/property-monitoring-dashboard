@@ -1,15 +1,23 @@
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from backend.db.schema import DB_PATH
-from backend.pipeline import run_pipeline
+from backend.db.schema import DB_PATH, init_db
+from backend.scrapers.scraper import scrape
+from backend.scrapers.fetch_activities import fetch_all_activities
 
 app = FastAPI(title="Property Monitoring API")
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -51,9 +59,6 @@ def _days_since(raw: str | None) -> int | None:
 
 @app.get("/api/cases")
 def get_cases():
-    if not DB_PATH.exists():
-        raise HTTPException(status_code=503, detail="Database not found")
-
     conn = get_conn()
     rows = conn.execute("""
         SELECT * FROM (
@@ -110,9 +115,6 @@ def get_cases():
 
 @app.get("/api/cases/by-id/{case_id}")
 def get_case_detail(case_id: int):
-    if not DB_PATH.exists():
-        raise HTTPException(status_code=503, detail="Database not found")
-
     conn = get_conn()
     case_exists = conn.execute(
         "SELECT 1 FROM cases WHERE id = ? LIMIT 1", (case_id,)
@@ -138,12 +140,52 @@ class ScrapeRequest(BaseModel):
     apn: str
 
 
-@app.post("/api/scrape")
-def start_scrape(body: ScrapeRequest):
+# ── Scrape state ─────────────────────────────────────────────────────
+_scrape_lock = threading.Lock()
+_scrape_state: dict[str, dict] = {}
+
+
+def _set_state(apn: str, **kwargs):
+    with _scrape_lock:
+        _scrape_state.setdefault(apn, {}).update(kwargs)
+
+
+def _run_pipeline(apn: str):
+    try:
+        _set_state(apn, state="scraping_cases", message="Scraping case list...", current=0, total=0)
+        init_db()
+        scrape(apn)
+        _set_state(apn, state="fetching_activities", message="Fetching activities...")
+
+        def on_progress(current: int, total: int):
+            _set_state(apn, current=current, total=total,
+                       message=f"Fetching activities: {current}/{total}")
+
+        fetch_all_activities(progress_callback=on_progress)
+
+        conn = sqlite3.connect(DB_PATH)
+        count = conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0]
+        conn.close()
+        _set_state(apn, state="done", message="Done", cases_scraped=count)
+    except Exception as e:
+        _set_state(apn, state="error", message=str(e))
+
+
+@app.post("/api/scrape", status_code=202)
+def start_scrape(body: ScrapeRequest, background_tasks: BackgroundTasks):
     if not body.apn.strip():
         raise HTTPException(status_code=422, detail="apn must be a non-empty string")
-    run_pipeline(body.apn.strip())
-    conn = get_conn()
-    count = conn.execute("SELECT COUNT(*) FROM cases").fetchone()[0]
-    conn.close()
-    return {"status": "ok", "cases_scraped": count}
+    apn = body.apn.strip()
+    with _scrape_lock:
+        if _scrape_state.get(apn, {}).get("state") in ("scraping_cases", "fetching_activities"):
+            return {"status": "already_running"}
+        _scrape_state[apn] = {"state": "scraping_cases", "message": "Scraping case list...", "current": 0, "total": 0}
+    background_tasks.add_task(_run_pipeline, apn)
+    return {"status": "started"}
+
+
+@app.get("/api/scrape/status")
+def get_scrape_status(apn: str):
+    with _scrape_lock:
+        status = dict(_scrape_state.get(apn, {"state": "idle"}))
+    return status

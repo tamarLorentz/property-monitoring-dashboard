@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { getCases, getCaseDetail, scrapeApn, CaseSummary, ActivityRecord } from "./api/cases";
+import { getCases, getCaseDetail, scrapeApn, getScrapeStatus, CaseSummary, ActivityRecord } from "./api/cases";
 import { CasesTable } from "./components/CasesTable";
 import { UrgencySettings } from "./components/UrgencySettings";
 import { loadUrgencyMap, getUrgency } from "./config/urgency";
+import { SOURCE_URL } from "./config/urgency";
 
 type FilterType = "all" | "open" | "new";
 
@@ -50,34 +51,51 @@ function App() {
   const [detail, setDetail] = useState<ActivityRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [scrapeError, setScrapeError] = useState<string | null>(null);
   const [apnInput, setApnInput] = useState("");
   const [scraping, setScraping] = useState(false);
+  const [scrapeMsg, setScrapeMsg] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>("all");
   const [showSettings, setShowSettings] = useState(false);
   const [urgencyVersion, setUrgencyVersion] = useState(0);
 
+  const currentDate = new Date().toLocaleDateString();
+  const apn = "2654002037";
+
   useEffect(() => {
     getCases()
       .then(setCases)
-      .catch((e) => setError(e.message))
+      .catch(() => { /* DB not yet populated - ignore */ })
       .finally(() => setLoading(false));
   }, []);
 
   async function handleScrape() {
     if (!apnInput.trim()) return;
+    const apn = apnInput.trim();
     setScraping(true);
-    setError(null);
+    setScrapeMsg(null);
+    setScrapeError(null);
     try {
-      await scrapeApn(apnInput.trim());
+      await scrapeApn(apn);
+      await new Promise<void>((resolve, reject) => {
+        const interval = setInterval(async () => {
+          try {
+            const s = await getScrapeStatus(apn);
+            setScrapeMsg(s.message ?? null);
+            if (s.state === "done") { clearInterval(interval); resolve(); }
+            else if (s.state === "error") { clearInterval(interval); reject(new Error(s.message)); }
+          } catch (e) { clearInterval(interval); reject(e); }
+        }, 1500);
+      });
       const data = await getCases();
       setCases(data);
       setSelected(null);
       setDetail([]);
     } catch (e: any) {
-      setError(e.message);
+      setScrapeError(e.message);
     } finally {
       setScraping(false);
+      setScrapeMsg(null);
     }
   }
 
@@ -92,7 +110,7 @@ function App() {
     setDetailLoading(true);
     getCaseDetail(Number(key))
       .then(setDetail)
-      .catch((e) => setError(e.message))
+      .catch((e) => setScrapeError(e.message))
       .finally(() => setDetailLoading(false));
   }
 
@@ -113,13 +131,17 @@ function App() {
     });
   }, [cases, filter, urgencyMap]);
 
-  if (loading) return <p>Loading...</p>;
-  if (error) return <p style={{ color: "red" }}>Error: {error}</p>;
+  if (loading) return <p style={{ fontFamily: "Inter, sans-serif", padding: "2rem" }}>Loading...</p>;
 
   return (
     <div style={{ fontFamily: "Inter, sans-serif", padding: "2rem", background: "#f8fafc", minHeight: "100vh" }}>
       <div style={{ maxWidth: 1100, margin: "0 auto" }}>
       <h1 style={{ color: "#1e3a5f", marginBottom: 4 }}>Property Monitoring Dashboard</h1>
+      {scrapeError && (
+        <div style={{ marginBottom: "1rem", padding: "0.65rem 1rem", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, color: "#b91c1c", fontSize: 14 }}>
+          Error: {scrapeError}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1.5rem" }}>
         <input
           type="text"
@@ -135,6 +157,9 @@ function App() {
         >
           {scraping ? "Scraping..." : "Scrape"}
         </button>
+        {scraping && scrapeMsg && (
+          <span style={{ fontSize: 13, color: "#555", fontStyle: "italic" }}>{scrapeMsg}</span>
+        )}
         <button
           onClick={() => setShowSettings(true)}
           style={{

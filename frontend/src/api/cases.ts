@@ -23,7 +23,7 @@ export interface ActivityRecord {
 
 export async function getCases(): Promise<CaseSummary[]> {
   const res = await fetch(`${API_BASE}/api/cases`);
-  if (!res.ok) throw new Error("Failed to fetch cases");
+  if (!res.ok) throw new Error(`Failed to fetch cases (${res.status})`);
   return res.json();
 }
 
@@ -33,12 +33,25 @@ export async function getCaseDetail(caseId: number): Promise<ActivityRecord[]> {
   return res.json();
 }
 
-export async function scrapeApn(apn: string): Promise<{ status: string; cases_scraped: number }> {
+export async function scrapeApn(apn: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/scrape`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ apn }),
   });
-  if (!res.ok) throw new Error("Failed to scrape APN");
+  if (!res.ok) throw new Error("Failed to start scrape");
+}
+
+export interface ScrapeStatus {
+  state: "idle" | "scraping_cases" | "fetching_activities" | "done" | "error";
+  message?: string;
+  current?: number;
+  total?: number;
+  cases_scraped?: number;
+}
+
+export async function getScrapeStatus(apn: string): Promise<ScrapeStatus> {
+  const res = await fetch(`${API_BASE}/api/scrape/status?apn=${encodeURIComponent(apn)}`);
+  if (!res.ok) throw new Error("Failed to get scrape status");
   return res.json();
 }

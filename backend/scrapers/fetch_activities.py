@@ -1,10 +1,11 @@
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Optional
 
 from backend.scrapers.scraper import HEADERS, parse_detail_page
 from backend.db.utils import get_connection, get_all_cases, insert_activity
 
-MAX_WORKERS = 5
+MAX_WORKERS = 10
 
 
 def _fetch_one(case):
@@ -22,7 +23,7 @@ def _fetch_one(case):
         return case["id"], case_number, case["case_type"], []
 
 
-def fetch_all_activities(db_path=None):
+def fetch_all_activities(db_path=None, progress_callback: Optional[Callable[[int, int], None]] = None):
     conn = get_connection(db_path)
     try:
         cases = get_all_cases(conn)
@@ -36,6 +37,8 @@ def fetch_all_activities(db_path=None):
                 case_id, case_number, case_type, activities = future.result()
                 print(f"[{i}/{total}] Case {case_number} ({case_type}) — {len(activities)} activity record(s)")
                 results.append((case_id, activities))
+                if progress_callback:
+                    progress_callback(i, total)
 
         for case_id, activities in results:
             for activity in activities:

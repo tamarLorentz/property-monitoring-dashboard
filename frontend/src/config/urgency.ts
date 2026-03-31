@@ -41,3 +41,5 @@ export function getUrgency(
 ): UrgencyLevel {
   return map[caseType] ?? 1;
 }
+
+export const SOURCE_URL = "https://housingapp.lacity.org/reportviolation/Pages/PropAtivityCases?APN=2654002037&Source=ActivityReport#divPropDetails";
