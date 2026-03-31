@@ -1,0 +1,44 @@
+const API_BASE = "http://localhost:8001";
+
+export interface CaseSummary {
+  id: number;
+  case_number: string;
+  case_type: string;
+  latest_activity_date: string | null;
+  date_opened: string | null;
+  date_closed: string | null;
+  current_status: string | null;
+  activity_count: number;
+  is_open: boolean;
+  detail_url: string | null;
+  days_since_last_activity: number | null;
+  is_new: boolean;
+}
+
+export interface ActivityRecord {
+  date: string;
+  case_type: string;
+  status: string;
+}
+
+export async function getCases(): Promise<CaseSummary[]> {
+  const res = await fetch(`${API_BASE}/api/cases`);
+  if (!res.ok) throw new Error("Failed to fetch cases");
+  return res.json();
+}
+
+export async function getCaseDetail(caseId: number): Promise<ActivityRecord[]> {
+  const res = await fetch(`${API_BASE}/api/cases/by-id/${caseId}`);
+  if (!res.ok) throw new Error("Failed to fetch case detail");
+  return res.json();
+}
+
+export async function scrapeApn(apn: string): Promise<{ status: string; cases_scraped: number }> {
+  const res = await fetch(`${API_BASE}/api/scrape`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apn }),
+  });
+  if (!res.ok) throw new Error("Failed to scrape APN");
+  return res.json();
+}
